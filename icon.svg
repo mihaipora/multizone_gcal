@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background circle (globe) -->
+  <circle cx="64" cy="64" r="58" fill="#1a73e8"/>
+
+  <!-- Globe highlight -->
+  <circle cx="64" cy="64" r="58" fill="url(#globeGrad)"/>
+
+  <!-- Gradient for 3D effect -->
+  <defs>
+    <radialGradient id="globeGrad" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#4da3ff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#0d47a1" stop-opacity="0.4"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Horizontal latitude lines -->
+  <ellipse cx="64" cy="34" rx="50" ry="4" fill="none" stroke="white" stroke-width="1.5" stroke-opacity="0.35"/>
+  <ellipse cx="64" cy="64" rx="56" ry="4" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.5"/>
+  <ellipse cx="64" cy="94" rx="50" ry="4" fill="none" stroke="white" stroke-width="1.5" stroke-opacity="0.35"/>
+
+  <!-- Vertical meridian lines (longitude) -->
+  <ellipse cx="64" cy="64" rx="20" ry="56" fill="none" stroke="white" stroke-width="1.8" stroke-opacity="0.45"/>
+  <ellipse cx="64" cy="64" rx="42" ry="56" fill="none" stroke="white" stroke-width="1.5" stroke-opacity="0.35"/>
+  <line x1="64" y1="6" x2="64" y2="122" stroke="white" stroke-width="2" stroke-opacity="0.5"/>
+
+  <!-- Clock hands overlay (bottom-right) -->
+  <circle cx="96" cy="96" r="26" fill="white" stroke="#1a73e8" stroke-width="3"/>
+  <circle cx="96" cy="96" r="22" fill="white"/>
+
+  <!-- Clock tick marks -->
+  <line x1="96" y1="76" x2="96" y2="80" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+  <line x1="96" y1="112" x2="96" y2="116" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+  <line x1="76" y1="96" x2="80" y2="96" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+  <line x1="112" y1="96" x2="116" y2="96" stroke="#333" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Hour hand (pointing to ~10) -->
+  <line x1="96" y1="96" x2="87" y2="82" stroke="#333" stroke-width="3" stroke-linecap="round"/>
+  <!-- Minute hand (pointing to ~2) -->
+  <line x1="96" y1="96" x2="107" y2="84" stroke="#1a73e8" stroke-width="2" stroke-linecap="round"/>
+  <!-- Center dot -->
+  <circle cx="96" cy="96" r="2.5" fill="#333"/>
+</svg>
