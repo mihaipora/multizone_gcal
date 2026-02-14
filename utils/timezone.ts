@@ -99,10 +99,16 @@ export function getHoursForDay(
   date: Date,
   timezone: string,
 ): Array<{ hour: number; label: string; date: Date }> {
-  const startOfDay = new Date(
-    date.toLocaleString("en-US", { timeZone: timezone }).split(",")[0],
-  );
-  startOfDay.setHours(0, 0, 0, 0);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parseInt(parts.find((p) => p.type === "year")?.value ?? "2024", 10);
+  const month = parseInt(parts.find((p) => p.type === "month")?.value ?? "1", 10) - 1;
+  const day = parseInt(parts.find((p) => p.type === "day")?.value ?? "1", 10);
+  const startOfDay = new Date(year, month, day, 0, 0, 0, 0);
 
   return Array.from({ length: 24 }, (_, hour) => {
     const hourDate = new Date(startOfDay.getTime() + hour * 60 * 60 * 1000);
@@ -112,6 +118,18 @@ export function getHoursForDay(
       date: hourDate,
     };
   });
+}
+
+/**
+ * Validate that a string is a supported IANA timezone ID.
+ */
+export function isValidTimezone(timezone: string): boolean {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── Saved timezone preferences ──
@@ -126,6 +144,7 @@ export async function saveTimezones(timezones: string[]): Promise<void> {
 }
 
 export async function addTimezone(timezone: string): Promise<string[]> {
+  if (!isValidTimezone(timezone)) return await getSavedTimezones();
   const current = await getSavedTimezones();
   if (current.includes(timezone)) return current;
   const updated = [...current, timezone];

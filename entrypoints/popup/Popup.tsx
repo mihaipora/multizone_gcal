@@ -4,20 +4,27 @@ import { TimezoneRow } from "@/components/TimezoneRow";
 import { TimezonePicker } from "@/components/TimezonePicker";
 
 export function Popup() {
-  const [timezones, setTimezones] = useState<string[]>([]);
+  const [timezones, setTimezones] = useState<string[] | null>(null);
 
   useEffect(() => {
     getSavedTimezones().then(setTimezones);
+
+    // Sync when storage changes (e.g. from side panel)
+    const listener = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
+      if (area === "local" && changes["multizone_timezones"]) {
+        setTimezones(changes["multizone_timezones"].newValue ?? []);
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
   }, []);
 
   const handleRemoveTimezone = async (tz: string) => {
-    const updated = await removeTimezone(tz);
-    setTimezones(updated);
+    setTimezones(await removeTimezone(tz));
   };
 
   const handleAddTimezone = async (tz: string) => {
-    const updated = await addTimezone(tz);
-    setTimezones(updated);
+    setTimezones(await addTimezone(tz));
   };
 
   return (
@@ -34,12 +41,20 @@ export function Popup() {
 
       {/* Timezone list */}
       <div style={{ maxHeight: 400, overflowY: "auto" }}>
-        {timezones.map((tz) => (
-          <TimezoneRow key={tz} timezone={tz} onRemove={handleRemoveTimezone} />
-        ))}
-        <div style={{ padding: "8px 12px" }}>
-          <TimezonePicker currentTimezones={timezones} onAdd={handleAddTimezone} />
-        </div>
+        {timezones === null ? (
+          <div style={{ padding: "16px 12px", color: "#999", fontSize: 13, textAlign: "center" }}>
+            Loading...
+          </div>
+        ) : (
+          <>
+            {timezones.map((tz) => (
+              <TimezoneRow key={tz} timezone={tz} onRemove={handleRemoveTimezone} />
+            ))}
+            <div style={{ padding: "8px 12px" }}>
+              <TimezonePicker currentTimezones={timezones} onAdd={handleAddTimezone} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -3,28 +3,25 @@ import {
   getSavedTimezones,
   addTimezone,
   removeTimezone,
-  getTimezoneInfo,
-  type TimezoneInfo,
 } from "@/utils/timezone";
 import { TimezoneRow } from "@/components/TimezoneRow";
 import { TimezonePicker } from "@/components/TimezonePicker";
 
 export function SidePanel() {
-  const [timezones, setTimezones] = useState<string[]>([]);
-  const [, setTimezoneInfos] = useState<TimezoneInfo[]>([]);
+  const [timezones, setTimezones] = useState<string[] | null>(null);
 
-  // Load saved timezones
   useEffect(() => {
     getSavedTimezones().then(setTimezones);
-  }, []);
 
-  // Update timezone info every 30 seconds
-  useEffect(() => {
-    const update = () => setTimezoneInfos(timezones.map((tz) => getTimezoneInfo(tz)));
-    update();
-    const interval = setInterval(update, 30_000);
-    return () => clearInterval(interval);
-  }, [timezones]);
+    // Sync when storage changes (e.g. from popup)
+    const listener = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
+      if (area === "local" && changes["multizone_timezones"]) {
+        setTimezones(changes["multizone_timezones"].newValue ?? []);
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, []);
 
   const handleAddTz = async (tz: string) => {
     setTimezones(await addTimezone(tz));
@@ -53,12 +50,20 @@ export function SidePanel() {
         <div style={{ padding: "8px 12px", fontWeight: 600, fontSize: 12, color: "#555", textTransform: "uppercase" }}>
           Timezones
         </div>
-        {timezones.map((tz) => (
-          <TimezoneRow key={tz} timezone={tz} onRemove={handleRemoveTz} />
-        ))}
-        <div style={{ padding: "8px 12px" }}>
-          <TimezonePicker currentTimezones={timezones} onAdd={handleAddTz} />
-        </div>
+        {timezones === null ? (
+          <div style={{ padding: "16px 12px", color: "#999", fontSize: 13, textAlign: "center" }}>
+            Loading...
+          </div>
+        ) : (
+          <>
+            {timezones.map((tz) => (
+              <TimezoneRow key={tz} timezone={tz} onRemove={handleRemoveTz} />
+            ))}
+            <div style={{ padding: "8px 12px" }}>
+              <TimezonePicker currentTimezones={timezones} onAdd={handleAddTz} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

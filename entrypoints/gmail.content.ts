@@ -40,9 +40,7 @@ export default defineContentScript({
         background-color: #bbdefb;
       }
       .${TOOLTIP_CLASS} {
-        position: absolute;
-        bottom: 100%;
-        left: 0;
+        position: fixed;
         background: #333;
         color: #fff;
         padding: 8px 12px;
@@ -59,12 +57,14 @@ export default defineContentScript({
     `;
     document.head.appendChild(style);
 
-    // Watch for email content to load and scan for times
+    // Watch for email content to load — scope to Gmail's main content area
     const observer = new MutationObserver(() => {
       scanEmailContent();
     });
 
-    observer.observe(document.body, {
+    // Gmail's email content lives inside [role="main"] or .nH
+    const observeTarget = document.querySelector('[role="main"]') || document.body;
+    observer.observe(observeTarget, {
       childList: true,
       subtree: true,
     });
@@ -130,16 +130,34 @@ export default defineContentScript({
         span.className = HIGHLIGHT_CLASS;
         span.textContent = match[0];
 
-        // Build tooltip
+        // Build tooltip content
         const tooltip = document.createElement("div");
         tooltip.className = TOOLTIP_CLASS;
-        for (const tz of tzs.slice(0, 5)) {
+        for (const tz of tzs) {
           const line = document.createElement("div");
           line.textContent = `${getTimezoneLabel(tz)}: ${formatDateTimeInZone(date, tz)}`;
           tooltip.appendChild(line);
         }
 
-        span.addEventListener("mouseenter", () => span.appendChild(tooltip));
+        // Position tooltip near cursor, clamped to viewport
+        span.addEventListener("mouseenter", (e) => {
+          document.body.appendChild(tooltip);
+          const rect = span.getBoundingClientRect();
+          const tooltipRect = tooltip.getBoundingClientRect();
+
+          let top = rect.top - tooltipRect.height - 4;
+          let left = rect.left;
+
+          // Clamp to viewport
+          if (top < 4) top = rect.bottom + 4;
+          if (left + tooltipRect.width > window.innerWidth - 4) {
+            left = window.innerWidth - tooltipRect.width - 4;
+          }
+          if (left < 4) left = 4;
+
+          tooltip.style.top = `${top}px`;
+          tooltip.style.left = `${left}px`;
+        });
         span.addEventListener("mouseleave", () => tooltip.remove());
 
         fragments.push(span);

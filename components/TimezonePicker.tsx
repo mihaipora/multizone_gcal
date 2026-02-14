@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { COMMON_TIMEZONES, getTimezoneLabel, getUTCOffset, searchTimezones } from "@/utils/timezone";
 
 interface Props {
@@ -16,6 +16,15 @@ export function TimezonePicker({ currentTimezones, onAdd }: Props) {
     }
     return COMMON_TIMEZONES.filter((tz) => !currentTimezones.includes(tz));
   }, [search, currentTimezones]);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setSearch("");
+  }, []);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  }, [close]);
 
   if (!open) {
     return (
@@ -38,10 +47,11 @@ export function TimezonePicker({ currentTimezones, onAdd }: Props) {
   }
 
   return (
-    <div style={{ padding: "8px 0" }}>
+    <div style={{ padding: "8px 0" }} onKeyDown={handleKeyDown}>
       <input
         type="text"
         placeholder="Search city, country, or timezone..."
+        aria-label="Search timezones"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         autoFocus
@@ -55,14 +65,14 @@ export function TimezonePicker({ currentTimezones, onAdd }: Props) {
           marginBottom: 4,
         }}
       />
-      <div style={{ maxHeight: 200, overflowY: "auto" }}>
+      <div style={{ maxHeight: 200, overflowY: "auto" }} role="listbox" aria-label="Timezone results">
         {available.map((tz) => (
           <button
             key={tz}
+            role="option"
             onClick={() => {
               onAdd(tz);
-              setOpen(false);
-              setSearch("");
+              close();
             }}
             style={{
               display: "block",
@@ -87,7 +97,7 @@ export function TimezonePicker({ currentTimezones, onAdd }: Props) {
         )}
       </div>
       <button
-        onClick={() => { setOpen(false); setSearch(""); }}
+        onClick={close}
         style={{
           marginTop: 4,
           padding: "4px 10px",

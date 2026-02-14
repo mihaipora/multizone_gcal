@@ -15,6 +15,25 @@ import {
   getTimezoneAbbreviation,
 } from "@/utils/timezone";
 
+// ── Cleanup registry for event listeners, intervals, observers ──
+
+let activeCleanups: Array<() => void> = [];
+
+function registerCleanup(fn: () => void) {
+  activeCleanups.push(fn);
+}
+
+function runCleanups() {
+  for (const fn of activeCleanups) {
+    try { fn(); } catch (_) {}
+  }
+  activeCleanups = [];
+}
+
+// ── Constants ──
+
+const MAX_ATTACH_ATTEMPTS = 120;
+
 export default defineContentScript({
   matches: ["https://calendar.google.com/*"],
   runAt: "document_idle",
@@ -28,7 +47,19 @@ export default defineContentScript({
 
     let timezones = await getSavedTimezones();
     if (timezones.length === 0) {
-      dbg("No timezones saved, exiting");
+      dbg("No timezones saved, waiting for changes...");
+      // Don't exit — listen for storage changes so we recover when user adds timezones
+      chrome.storage.onChanged.addListener(async (changes, area) => {
+        if (area !== "local" || !changes["multizone_timezones"]) return;
+        const newTzs = changes["multizone_timezones"].newValue as string[] | undefined;
+        if (!newTzs || newTzs.length === 0) return;
+        dbg(`Timezones added: ${newTzs.join(", ")}`);
+        timezones = newTzs;
+        const calendarTz = detectCalendarTimezone();
+        injectStyles(PANEL_ID, COL_WIDTH);
+        attached = false;
+        await attach(PANEL_ID, COL_WIDTH, timezones, calendarTz);
+      });
       return;
     }
     dbg(`Loaded ${timezones.length} timezones: ${timezones.join(", ")}`);
@@ -41,19 +72,22 @@ export default defineContentScript({
 
     let attached = false;
 
-    const attach = async () => {
-      // Keep retrying — GCal's SPA can take a long time to render on hard reload
-      for (let attempt = 0; !attached; attempt++) {
-        await sleep(attempt < 30 ? 1000 : 3000); // faster initially, then slower
-        attached = tryAttach(PANEL_ID, COL_WIDTH, timezones, calendarTz);
+    const attach = async (panelId: string, colWidth: number, tzs: string[], calTz: string) => {
+      for (let attempt = 0; !attached && attempt < MAX_ATTACH_ATTEMPTS; attempt++) {
+        await sleep(attempt < 30 ? 1000 : 3000);
+        attached = tryAttach(panelId, colWidth, tzs, calTz);
         if (!attached && attempt % 10 === 9) {
           dbg(`Attach attempt ${attempt + 1} failed, still retrying...`);
         }
       }
-      dbg("SUCCESS: Panel attached!");
+      if (attached) {
+        dbg("SUCCESS: Panel attached!");
+      } else {
+        dbg(`Gave up after ${MAX_ATTACH_ATTEMPTS} attempts`);
+      }
     };
 
-    await attach();
+    await attach(PANEL_ID, COL_WIDTH, timezones, calendarTz);
 
     // Re-attach when timezones change in storage (user adds/removes via popup)
     chrome.storage.onChanged.addListener(async (changes, area) => {
@@ -64,7 +98,7 @@ export default defineContentScript({
       timezones = newTzs;
       cleanup(PANEL_ID);
       attached = false;
-      await attach();
+      await attach(PANEL_ID, COL_WIDTH, timezones, calendarTz);
     });
 
     // Re-attach on SPA navigation
@@ -88,13 +122,27 @@ export default defineContentScript({
   },
 });
 
-/* ── debug overlay ───────────────────────────────────────────────── */
+/* ── debug logging ───────────────────────────────────────────────── */
 
 const DEBUG_ID = "multizone-debug";
 const debugLines: string[] = [];
+let debugEnabled: boolean | null = null;
+
+function isDebugEnabled(): boolean {
+  if (debugEnabled !== null) return debugEnabled;
+  try {
+    debugEnabled = localStorage.getItem("multizone_debug") === "1";
+  } catch {
+    debugEnabled = false;
+  }
+  return debugEnabled;
+}
 
 function dbg(msg: string) {
   console.log(`[Multizone GCal] ${msg}`);
+
+  if (!isDebugEnabled()) return;
+
   debugLines.push(`${new Date().toLocaleTimeString()} ${msg}`);
   if (debugLines.length > 20) debugLines.shift();
   let el = document.getElementById(DEBUG_ID);
@@ -235,6 +283,9 @@ function findScrollContainer(): HTMLElement | null {
 }
 
 function cleanup(panelId: string) {
+  // Run all registered cleanups (listeners, intervals, observers)
+  runCleanups();
+
   document.getElementById(panelId)?.remove();
   const main = findMain();
   if (main) {
@@ -410,6 +461,7 @@ function tryAttach(panelId: string, colWidth: number, timezones: string[], calen
       }
     };
     scrollContainer.addEventListener("scroll", syncScroll, { passive: true });
+    registerCleanup(() => scrollContainer.removeEventListener("scroll", syncScroll));
     syncScroll();
 
     // Reposition on resize AND when all-day section expands/collapses
@@ -432,6 +484,7 @@ function tryAttach(panelId: string, colWidth: number, timezones: string[], calen
       lastScrollHeight = rect.height;
     };
     window.addEventListener("resize", reposition);
+    registerCleanup(() => window.removeEventListener("resize", reposition));
 
     // Watch for layout changes (all-day section expand/collapse moves the scroll container)
     const layoutCheck = setInterval(() => {
@@ -441,12 +494,14 @@ function tryAttach(panelId: string, colWidth: number, timezones: string[], calen
         reposition();
       }
     }, 300);
+    registerCleanup(() => clearInterval(layoutCheck));
 
     // Also observe DOM mutations in main that might shift layout
     const observer = new MutationObserver(() => {
       requestAnimationFrame(reposition);
     });
     observer.observe(main, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+    registerCleanup(() => observer.disconnect());
 
     dbg(`Panel at left=${panelLeft.toFixed(0)}, top=${mainRect.top.toFixed(0)}, headerH=${headerHeight}`);
 
@@ -496,6 +551,8 @@ function renderHourGrid(
       // with line-height: 16px — text naturally centers on the gridline
       const label = document.createElement("div");
       label.className = "mz-tz-label" + (h === currentCalHour ? " mz-current" : "");
+      label.dataset.hour = String(h);
+      label.dataset.tzIndex = String(i);
       // Offset top by half line-height (8px) so the text centers on the gridline.
       // GCal achieves this via its parent container structure; we do it explicitly.
       label.style.cssText = `
@@ -528,17 +585,16 @@ function updateTimes(panelId: string, timezones: string[], calendarTz: string) {
   ) % 24;
 
   const labels = panel.querySelectorAll(".mz-tz-label");
-  labels.forEach((label) => {
+  for (const label of labels) {
+    if (!(label instanceof HTMLElement)) continue;
     const time = label.querySelector(".mz-tz-time");
-    if (!time) return;
-    // Labels are ordered: h0-tz0, h0-tz1, ..., h1-tz0, h1-tz1, ...
-    const idx = Array.from(labels).indexOf(label);
-    const h = Math.floor(idx / timezones.length);
-    const i = idx % timezones.length;
+    if (!time) continue;
+    const h = parseInt(label.dataset.hour ?? "0", 10);
+    const i = parseInt(label.dataset.tzIndex ?? "0", 10);
     const hourDate = dateAtHourInTimezone(h, calendarTz);
     time.textContent = formatHourGcalStyle(hourDate, timezones[i]);
     label.classList.toggle("mz-current", h === currentCalHour);
-  });
+  }
 }
 
 /**
