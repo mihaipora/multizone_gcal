@@ -2,15 +2,12 @@
 
 Chrome extension that adds multi-timezone columns to Google Calendar and highlights times in Gmail with timezone conversions.
 
-![Chrome](https://img.shields.io/badge/Chrome-MV3-blue) ![React](https://img.shields.io/badge/React-19-61dafb) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6)
-
 ## Features
 
-- **Calendar overlay** — Adds timezone columns to the left of Google Calendar's hour grid, aligned and scroll-synced with the native layout
-- **Gmail time detection** — Highlights times in emails (e.g. "3:00 PM") with hover tooltips showing conversions across all your saved timezones
-- **Searchable timezone picker** — Search ~400 IANA timezones by city, country name, abbreviation, or UTC offset (e.g. "India", "Mumbai", "IST", "UTC+5:30")
-- **Half-hour offset support** — Correctly displays :30 and :45 offsets (India, Nepal, etc.)
-- **Side panel + popup** — Manage timezones from either the side panel or toolbar popup, changes sync instantly between both
+- **Calendar overlay** — Adds timezone columns to the left of Google Calendar's hour grid, scroll-synced with the native layout
+- **Gmail time detection** — Highlights times in emails (e.g. "3:00 PM") with hover tooltips showing conversions across your saved timezones
+- **Searchable timezone picker** — Search ~400 IANA timezones by city, country, abbreviation, or UTC offset (e.g. "India", "Mumbai", "IST", "UTC+5:30"). Works with half-hour offsets like India (UTC+5:30) and Nepal (UTC+5:45)
+- **Side panel + popup** — Manage timezones from either the side panel or toolbar popup, changes sync instantly across both and the calendar overlay
 - **No external APIs** — All timezone logic uses the browser's built-in `Intl` API
 
 ## Development
@@ -63,14 +60,6 @@ npm run zip
 
 Creates a ready-to-upload ZIP for the Chrome Web Store.
 
-### Firefox
-
-```sh
-npm run dev:firefox      # dev mode
-npm run build:firefox    # production build
-npm run zip:firefox      # distributable ZIP
-```
-
 ## Project Structure
 
 ```
@@ -87,17 +76,11 @@ utils/
   timezone.ts              Timezone formatting, storage, search, and alias map
 ```
 
-## How It Works
-
-**Calendar overlay**: The content script waits for Google Calendar's SPA to render, finds the scrollable hour grid, and injects a fixed panel to the left of `<main>`. It shrinks the main area via `marginLeft` so nothing gets clipped. Times are scroll-synced and repositioned on resize/layout changes.
-
-**Timezone search**: An alias map of ~120 entries maps IANA IDs to country names, alternate cities, and abbreviations. Searching "Romania" finds `Europe/Bucharest`, "Beijing" finds `Asia/Shanghai`, "UK" finds `Europe/London`.
-
-**Storage**: Timezone list is persisted in `chrome.storage.local`. Popup, side panel, and content scripts all listen for changes and update in real time.
+See `CLAUDE.md` for detailed architecture notes, design decisions, and content script gotchas.
 
 ## Debugging
 
-Console logs are always available with the `[Multizone GCal]` prefix. To enable the visual debug overlay on the calendar page:
+Console logs use the `[Multizone GCal]` prefix. To enable the visual debug overlay on the calendar page:
 
 ```js
 // Run in the calendar page's DevTools console
@@ -106,7 +89,3 @@ localStorage.setItem("multizone_debug", "1");
 ```
 
 Set to `"0"` or remove to disable.
-
-## License
-
-MIT
