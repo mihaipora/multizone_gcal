@@ -117,6 +117,17 @@ export default defineContentScript({
       }
     }, 1000);
 
+    // Re-attach when scroll state changes (e.g. window resize makes grid scrollable)
+    setInterval(() => {
+      const panel = document.getElementById(PANEL_ID);
+      if (panel?.dataset.mzNeedsReattach === "1") {
+        dbg("Re-attaching due to scroll state change...");
+        cleanup(PANEL_ID);
+        attached = false;
+        attached = tryAttach(PANEL_ID, COL_WIDTH, timezones, calendarTz);
+      }
+    }, 500);
+
     // Refresh times every minute
     setInterval(() => updateTimes(PANEL_ID, timezones, calendarTz), 60_000);
   },
@@ -252,34 +263,42 @@ function findMain(): HTMLElement | null {
   return document.querySelector('main, [role="main"]') as HTMLElement | null;
 }
 
-function findScrollContainer(): HTMLElement | null {
-  const main = findMain();
-  if (!main) {
-    dbg("findScroll: No <main> or [role=main] element");
-    return null;
-  }
+/**
+ * Find the hour grid element: a container with 23-49 evenly-spaced children.
+ * Returns the parent of those rows, or null if not found.
+ */
+function findHourGrid(root: HTMLElement): HTMLElement | null {
+  let result: HTMLElement | null = null;
 
-  let best: HTMLElement | null = null;
-  let bestHeight = 0;
-  let count = 0;
+  const walk = (el: HTMLElement, depth: number) => {
+    if (result || depth > 20) return;
+    const children = Array.from(el.children).filter(c => c instanceof HTMLElement) as HTMLElement[];
 
-  const walk = (el: Element, depth: number) => {
-    if (!(el instanceof HTMLElement) || depth > 15) return;
-    const style = getComputedStyle(el);
-    const scrollable =
-      style.overflowY === "scroll" || style.overflowY === "auto" ||
-      style.overflow === "scroll" || style.overflow === "auto";
-
-    if (scrollable && el.scrollHeight > el.clientHeight + 50) {
-      count++;
-      if (el.scrollHeight > bestHeight) { best = el; bestHeight = el.scrollHeight; }
+    if (children.length >= 23 && children.length <= 49) {
+      const rects = children.slice(0, Math.min(children.length, 24)).map(c => c.getBoundingClientRect());
+      if (rects.length >= 2) {
+        const pitches: number[] = [];
+        for (let i = 1; i < rects.length; i++) {
+          pitches.push(rects[i].top - rects[i - 1].top);
+        }
+        const avgPitch = pitches.reduce((a, b) => a + b, 0) / pitches.length;
+        if (avgPitch > 15) {
+          const maxDev = Math.max(...pitches.map(p => Math.abs(p - avgPitch)));
+          if (maxDev < 3) {
+            result = el;
+            return;
+          }
+        }
+      }
     }
-    for (const child of el.children) walk(child, depth + 1);
+
+    for (const child of children) {
+      if (child instanceof HTMLElement) walk(child, depth + 1);
+    }
   };
 
-  walk(main, 0);
-  dbg(`findScroll: ${count} scrollable divs, best height: ${bestHeight}`);
-  return best;
+  walk(root, 0);
+  return result;
 }
 
 function cleanup(panelId: string) {
@@ -297,105 +316,64 @@ function cleanup(panelId: string) {
   }
 }
 
-/**
- * Find the actual hour row pitch (top-to-top distance) and top offset by inspecting
- * the scroll container's DOM for a group of ~24 equally-sized children.
- * Uses top-to-top pitch instead of element height to capture borders/gaps.
- */
-function findGridMetrics(scrollContainer: HTMLElement): { rowHeight: number; topOffset: number } {
-  let best: { rowHeight: number; topOffset: number; count: number } | null = null;
-
-  const walk = (el: HTMLElement, depth: number) => {
-    if (depth > 6) return;
-    const children = Array.from(el.children).filter(c => c instanceof HTMLElement) as HTMLElement[];
-
-    if (children.length >= 23 && children.length <= 49) {
-      const rects = children.slice(0, Math.min(children.length, 24)).map(c => c.getBoundingClientRect());
-
-      // Measure pitch: top-to-top distance between consecutive rows
-      // This captures element height + borders + gaps accurately
-      if (rects.length >= 2) {
-        const pitches: number[] = [];
-        for (let i = 1; i < rects.length; i++) {
-          pitches.push(rects[i].top - rects[i - 1].top);
-        }
-        const avgPitch = pitches.reduce((a, b) => a + b, 0) / pitches.length;
-
-        if (avgPitch > 15) {
-          const maxDev = Math.max(...pitches.map(p => Math.abs(p - avgPitch)));
-          if (maxDev < 3) {
-            const scrollRect = scrollContainer.getBoundingClientRect();
-            const topOff = rects[0].top - scrollRect.top + scrollContainer.scrollTop;
-            if (!best || children.length > best.count) {
-              best = { rowHeight: avgPitch, topOffset: topOff, count: children.length };
-            }
-          }
-        }
-      }
-    }
-
-    for (const child of children) walk(child, depth + 1);
-  };
-
-  walk(scrollContainer, 0);
-
-  if (best) {
-    dbg(`gridMetrics: ${best.count} rows, pitch=${best.rowHeight.toFixed(2)}px, offset=${best.topOffset.toFixed(1)}px`);
-    return best;
-  }
-
-  const fallback = scrollContainer.scrollHeight / 24;
-  dbg(`gridMetrics: fallback h=${fallback.toFixed(1)}px`);
-  return { rowHeight: fallback, topOffset: 0 };
-}
-
 function tryAttach(panelId: string, colWidth: number, timezones: string[], calendarTz: string): boolean {
   if (document.getElementById(panelId)) return true;
-
-  const scrollContainer = findScrollContainer();
-  if (!scrollContainer) return false;
-
-  if (scrollContainer.scrollHeight < 500) {
-    dbg(`tryAttach: scrollHeight ${scrollContainer.scrollHeight} too small`);
-    return false;
-  }
 
   const main = findMain();
   if (!main) return false;
 
+  const hourGrid = findHourGrid(main);
+  if (!hourGrid) return false;
+
+  // Measure row height from hour grid children
+  const gridChildren = Array.from(hourGrid.children).filter(c => c instanceof HTMLElement) as HTMLElement[];
+  if (gridChildren.length < 23) return false;
+  const gridRects = gridChildren.slice(0, 24).map(c => c.getBoundingClientRect());
+  const pitches: number[] = [];
+  for (let i = 1; i < gridRects.length; i++) pitches.push(gridRects[i].top - gridRects[i - 1].top);
+  const rowHeight = pitches.reduce((a, b) => a + b, 0) / pitches.length;
+  if (rowHeight < 15) return false;
+
+  // Find the grid viewport: the scrollable ancestor that clips the hour grid.
+  // If no scrollable ancestor (window tall enough), use hourGrid itself as boundary.
+  let gridViewport: HTMLElement | null = null;
+  let el: HTMLElement | null = hourGrid.parentElement;
+  while (el && el !== document.body) {
+    const style = getComputedStyle(el);
+    const overflow = style.overflow + " " + style.overflowY;
+    if ((overflow.includes("auto") || overflow.includes("scroll") || overflow.includes("overlay")) &&
+        el.scrollHeight > el.clientHeight + 50) {
+      gridViewport = el;
+      break;
+    }
+    el = el.parentElement;
+  }
+
   const panelWidth = timezones.length * colWidth;
-
-  // Measure grid top offset from the DOM
-  const { topOffset } = findGridMetrics(scrollContainer);
-
-  // Measure main's position BEFORE modifying layout
-  const origMainRect = main.getBoundingClientRect();
 
   // Save original main styles for cleanup
   if (main.dataset.mzOrigStyle === undefined) {
     main.dataset.mzOrigStyle = main.style.cssText || "";
   }
 
-  // Shrink the main area to make room (prevents right-side cutoff)
-  // Don't set overflow:hidden — it can clip Google Calendar's time labels
+  // Shrink main to make room (prevents right-side cutoff)
   main.style.marginLeft = `${panelWidth}px`;
   main.style.minWidth = "0";
   main.style.maxWidth = `calc(100% - ${panelWidth}px)`;
 
   // Wait a frame for layout to settle after shrinking main
   requestAnimationFrame(() => {
-    const scrollRect = scrollContainer.getBoundingClientRect();
     const mainRect = main.getBoundingClientRect();
-
-    // Position panel to the left of MAIN (not scroll container)
-    // so Google Calendar's own timezone columns (SF/KRK) remain visible
+    // Grid viewport boundary: where the scrollable/visible grid area starts
+    const viewportEl = gridViewport || hourGrid;
+    const viewportRect = viewportEl.getBoundingClientRect();
+    const headerHeight = Math.max(0, Math.round(viewportRect.top - mainRect.top));
+    const bodyHeight = Math.max(0, Math.round(mainRect.bottom - viewportRect.top));
     const panelLeft = mainRect.left - panelWidth;
 
-    // Dynamically measure GCal's header height (from main top to scroll container top)
-    // This changes when all-day section expands/collapses
-    let headerHeight = Math.round(scrollRect.top - mainRect.top);
-    dbg(`layout: main.left=${mainRect.left.toFixed(0)}, scroll.left=${scrollRect.left.toFixed(0)}, tzGap=${(scrollRect.left - mainRect.left).toFixed(0)}px, headerH=${headerHeight}`);
+    dbg(`layout: headerH=${headerHeight}, bodyH=${bodyHeight}, rowH=${rowHeight.toFixed(1)}, viewport=${gridViewport ? "scroll" : "grid"}`);
 
+    // Create panel
     const panel = document.createElement("div");
     panel.id = panelId;
     panel.style.cssText = `
@@ -403,19 +381,18 @@ function tryAttach(panelId: string, colWidth: number, timezones: string[], calen
       top: ${mainRect.top}px;
       left: ${panelLeft}px;
       width: ${panelWidth}px;
-      height: ${scrollRect.height + headerHeight}px;
+      height: ${mainRect.height}px;
       z-index: 100;
       overflow: hidden;
       background: #fff;
     `;
 
-    // Header — matches GCal's header height, labels positioned absolutely
-    // to align with GCal's timezone labels (at columnheader.bottom)
+    // Header — timezone labels aligned with GCal's column headers
     const header = document.createElement("div");
     header.className = "mz-header-row";
-    let headerPadTop = measureHeaderLabelTarget(main, mainRect.top);
-    header.style.cssText = `height: ${headerHeight}px; position: relative; overflow: visible;`;
+    header.style.cssText = `height: ${headerHeight}px; position: relative; overflow: hidden;`;
 
+    const headerPadTop = measureHeaderLabelTarget(main, mainRect.top);
     const labelRow = document.createElement("div");
     labelRow.className = "mz-label-row";
     labelRow.style.cssText = `position: absolute; top: ${headerPadTop}px; left: 0; width: 100%; display: flex;`;
@@ -429,95 +406,105 @@ function tryAttach(panelId: string, colWidth: number, timezones: string[], calen
     header.appendChild(labelRow);
     panel.appendChild(header);
 
-    // Scrollable body with hour rows
+    // Body — clips to the visible grid area
     const body = document.createElement("div");
     body.className = "mz-body";
-    body.style.cssText = `height: ${scrollRect.height}px; overflow: hidden;`;
+    body.style.cssText = `height: ${bodyHeight}px; overflow: hidden; position: relative;`;
 
-    // Add spacer to match grid top offset
-    if (topOffset > 0) {
-      const spacer = document.createElement("div");
-      spacer.style.height = `${topOffset}px`;
-      body.appendChild(spacer);
-    }
-
-    // Calculate exact row height and total grid height from scrollHeight
-    const totalGridHeight = scrollContainer.scrollHeight - topOffset;
-    const exactRowHeight = totalGridHeight / 24;
-    renderHourGrid(body, timezones, calendarTz, colWidth, totalGridHeight, exactRowHeight);
-    dbg(`grid: totalH=${totalGridHeight}px, rowH=${exactRowHeight}px`);
+    const totalGridHeight = rowHeight * 24;
+    renderHourGrid(body, timezones, calendarTz, colWidth, totalGridHeight, rowHeight);
     panel.appendChild(body);
     document.body.appendChild(panel);
 
-    // Scroll sync — use proportional scrolling to handle content height differences
-    const syncScroll = () => {
-      const gcalMaxScroll = scrollContainer.scrollHeight - scrollContainer.clientHeight;
-      const bodyMaxScroll = body.scrollHeight - body.clientHeight;
-      if (gcalMaxScroll > 0 && bodyMaxScroll > 0) {
-        const ratio = scrollContainer.scrollTop / gcalMaxScroll;
-        body.scrollTop = ratio * bodyMaxScroll;
-      } else {
-        body.scrollTop = scrollContainer.scrollTop;
-      }
-    };
-    scrollContainer.addEventListener("scroll", syncScroll, { passive: true });
-    registerCleanup(() => scrollContainer.removeEventListener("scroll", syncScroll));
-    syncScroll();
+    const mzGrid = body.querySelector(".mz-grid") as HTMLElement;
+    const hour0Child = gridChildren[0]; // Hour-0 row in GCal's grid
 
-    // Reposition on resize AND when all-day section expands/collapses
-    let lastScrollTop = -1;
-    let lastScrollHeight = -1;
+    // ── Position-based scroll sync ──
+    // Track where GCal's hour-0 row is on screen and mirror with translateY.
+    const syncPosition = () => {
+      if (!hour0Child.isConnected || !mzGrid.isConnected) return;
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = hour0Child.getBoundingClientRect();
+      const offset = rowRect.top - bodyRect.top;
+      mzGrid.style.transform = `translateY(${offset}px)`;
+    };
+
+    // Capture ALL scroll events (GCal may scroll in various nested containers)
+    window.addEventListener("scroll", syncPosition, { capture: true, passive: true });
+    registerCleanup(() => window.removeEventListener("scroll", syncPosition, { capture: true }));
+
+    // Initial sync
+    syncPosition();
+
+    // ── Reposition panel on layout changes ──
+    let lastMainTop = mainRect.top;
+    let lastViewportTop = viewportRect.top;
+
     const reposition = () => {
-      const rect = scrollContainer.getBoundingClientRect();
+      if (!document.getElementById(panelId)) return;
       const mRect = main.getBoundingClientRect();
-      // Re-measure header height and label offset (changes when all-day section expands/collapses)
-      headerHeight = Math.round(rect.top - mRect.top);
-      headerPadTop = measureHeaderLabelTarget(main, mRect.top);
+      const vRect = viewportEl.getBoundingClientRect();
+      const hh = Math.max(0, Math.round(vRect.top - mRect.top));
+      const bh = Math.max(0, Math.round(mRect.bottom - vRect.top));
+
       panel.style.top = `${mRect.top}px`;
       panel.style.left = `${mRect.left - panelWidth}px`;
-      panel.style.height = `${rect.height + headerHeight}px`;
-      header.style.height = `${headerHeight}px`;
-      const lr = header.querySelector(".mz-label-row") as HTMLElement;
-      if (lr) lr.style.top = `${headerPadTop}px`;
-      body.style.height = `${rect.height}px`;
-      lastScrollTop = rect.top;
-      lastScrollHeight = rect.height;
-    };
-    window.addEventListener("resize", reposition);
-    registerCleanup(() => window.removeEventListener("resize", reposition));
+      panel.style.height = `${mRect.height}px`;
+      header.style.height = `${hh}px`;
+      body.style.height = `${bh}px`;
 
-    // Watch for layout changes (all-day section expand/collapse moves the scroll container)
+      const hpt = measureHeaderLabelTarget(main, mRect.top);
+      const lr = header.querySelector(".mz-label-row") as HTMLElement;
+      if (lr) lr.style.top = `${hpt}px`;
+
+      lastMainTop = mRect.top;
+      lastViewportTop = vRect.top;
+
+      syncPosition();
+    };
+
+    // Window resize → full re-attach (scroll container may appear/disappear)
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const onResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        dbg("Window resized, re-attaching...");
+        panel.dataset.mzNeedsReattach = "1";
+      }, 300);
+    };
+    window.addEventListener("resize", onResize);
+    registerCleanup(() => window.removeEventListener("resize", onResize));
+
+    // Periodic layout check (catches changes not triggered by scroll or mutation)
     const layoutCheck = setInterval(() => {
       if (!document.getElementById(panelId)) { clearInterval(layoutCheck); return; }
-      const rect = scrollContainer.getBoundingClientRect();
-      if (Math.abs(rect.top - lastScrollTop) > 1 || Math.abs(rect.height - lastScrollHeight) > 1) {
+      const mRect = main.getBoundingClientRect();
+      const vRect = viewportEl.getBoundingClientRect();
+      if (Math.abs(mRect.top - lastMainTop) > 1 || Math.abs(vRect.top - lastViewportTop) > 1) {
         reposition();
       }
-    }, 300);
+    }, 500);
     registerCleanup(() => clearInterval(layoutCheck));
 
-    // Also observe DOM mutations in main that might shift layout
-    const observer = new MutationObserver(() => {
-      requestAnimationFrame(reposition);
-    });
+    // DOM mutation observer for layout shifts
+    let repositionRafId = 0;
+    const scheduleReposition = () => {
+      if (repositionRafId) return;
+      repositionRafId = requestAnimationFrame(() => {
+        repositionRafId = 0;
+        reposition();
+      });
+    };
+    registerCleanup(() => { if (repositionRafId) cancelAnimationFrame(repositionRafId); });
+
+    const observer = new MutationObserver(scheduleReposition);
     observer.observe(main, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
     registerCleanup(() => observer.disconnect());
 
-    dbg(`Panel at left=${panelLeft.toFixed(0)}, top=${mainRect.top.toFixed(0)}, headerH=${headerHeight}`);
-
-    // Dynamically match GCal's time label styles
+    // Match GCal's time label styles
     applyGcalStyles(panel, main);
 
-    // Measure header alignment: compare our label Y with columnheader bottom
-    requestAnimationFrame(() => {
-      const ch = main.querySelector('[role="columnheader"]');
-      const mzLabel = panel.querySelector(".mz-label-row .mz-tz-header") as HTMLElement;
-      if (ch && mzLabel) {
-        const chBottom = ch.getBoundingClientRect().bottom;
-        const mzTop = mzLabel.getBoundingClientRect().top;
-        dbg(`HEADER ALIGN: colHeader.bottom=${chBottom.toFixed(1)}, mz="${mzLabel.textContent}" top=${mzTop.toFixed(1)}, diff=${(mzTop - chBottom).toFixed(1)}px`);
-      }
-    });
+    dbg(`Panel attached: left=${panelLeft.toFixed(0)}, headerH=${headerHeight}, rowH=${rowHeight.toFixed(1)}`);
   });
 
   return true;
@@ -543,7 +530,8 @@ function renderHourGrid(
     new Intl.DateTimeFormat("en-US", { timeZone: calendarTz, hour: "numeric", hour12: false }).format(now),
   ) % 24;
 
-  for (let h = 0; h < 24; h++) {
+  // Start at h=1: GCal hides the first hour label at the top of the grid
+  for (let h = 1; h < 24; h++) {
     const hourDate = dateAtHourInTimezone(h, calendarTz);
 
     for (let i = 0; i < timezones.length; i++) {

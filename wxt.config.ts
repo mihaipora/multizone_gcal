@@ -6,7 +6,7 @@ export default defineConfig({
     name: "Multizone GCal",
     description:
       "Multi-timezone overlay for Google Calendar — schedule across timezones with ease",
-    version: "1.5.8",
+    version: "1.7.0",
     permissions: ["storage", "sidePanel", "activeTab"],
     host_permissions: [
       "https://calendar.google.com/*",

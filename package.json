@@ -1,6 +1,6 @@
 {
   "name": "multizone-gcal",
-  "version": "1.5.8",
+  "version": "1.7.0",
   "description": "Chrome extension for multi-timezone Google Calendar scheduling",
   "private": true,
   "type": "module",
